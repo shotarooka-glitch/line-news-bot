@@ -131,7 +131,7 @@ def fetch_yahoo(symbol):
         if len(closes) < 2:
             return None, None
         prev, last = closes[-2], closes[-1]
-        return last, (last - prev) / prev * 100
+        return last, last - prev
     except Exception:
         return None, None
 
@@ -196,7 +196,7 @@ def build_market_message():
             lines.append(f"  {label:<12} -")
             continue
         arrow = "▲" if chg >= 0 else "▼"
-        lines.append(f"  {label:<12} {fmt_number(price, dec)}{unit}  {arrow}{abs(chg):.2f}%")
+        lines.append(f"  {label:<12} {fmt_number(price, dec)}{unit}  {arrow}{fmt_number(abs(chg), dec)}")
 
     # 為替
     lines.append("\n【為替】")
@@ -214,7 +214,7 @@ def build_market_message():
             lines.append(f"  {label:<12} -")
             continue
         arrow = "▲" if chg >= 0 else "▼"
-        lines.append(f"  {label:<12} {fmt_number(price, dec)}{unit}  {arrow}{abs(chg):.2f}%")
+        lines.append(f"  {label:<12} {fmt_number(price, dec)}{unit}  {arrow}{fmt_number(abs(chg), dec)}")
 
     # 金利（前日比は差分で表示）
     lines.append("\n【金利】")
@@ -222,7 +222,7 @@ def build_market_message():
     price, chg = fetch_yahoo("^TNX")
     if price:
         arrow = "▲" if chg >= 0 else "▼"
-        lines.append(f"  {'米10年債':<12} {fmt_number(price, 3)}%  {arrow}{abs(chg):.2f}%")
+        lines.append(f"  {'米10年債':<12} {fmt_number(price, 3)}%  {arrow}{abs(chg):.3f}")
     else:
         lines.append(f"  {'米10年債':<12} -")
     # 日本10年（財務省）
@@ -253,14 +253,14 @@ def build_market_message():
             lines.append(f"  {label:<12} -")
             continue
         arrow = "▲" if chg >= 0 else "▼"
-        lines.append(f"  {label:<12} {unit}{fmt_number(price, dec)}  {arrow}{abs(chg):.2f}%")
+        lines.append(f"  {label:<12} {unit}{fmt_number(price, dec)}  {arrow}{fmt_number(abs(chg), dec)}")
 
     # 暗号資産
     lines.append("\n【暗号資産】")
     price, chg = fetch_yahoo("BTC-USD")
     if price:
         arrow = "▲" if chg >= 0 else "▼"
-        lines.append(f"  {'BTC':<12} ${fmt_number(price, 0)}  {arrow}{abs(chg):.2f}%")
+        lines.append(f"  {'BTC':<12} ${fmt_number(price, 0)}  {arrow}{fmt_number(abs(chg), 0)}")
     else:
         lines.append(f"  {'BTC':<12} -")
 
