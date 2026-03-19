@@ -346,6 +346,7 @@ def build_header(total_items):
     )
 
 
+
 def send_line_messages(messages):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {
