@@ -5,7 +5,9 @@ import os
 import re
 import requests
 import feedparser
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+JST = timezone(timedelta(hours=9))
 
 LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 LINE_USER_ID = os.environ["LINE_USER_ID"]
@@ -121,16 +123,25 @@ def fmt_number(value, decimals):
 
 def fetch_yahoo(symbol):
     """Yahoo Finance v8 APIで終値と前日比を取得"""
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=10d"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         r = requests.get(url, headers=headers, timeout=10)
         data = r.json()
-        closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-        closes = [c for c in closes if c is not None]
-        if len(closes) < 2:
+        result = data["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+        # 日付ごとにユニーク化（同日の重複エントリを除去）
+        date_price = {}
+        for t, c in zip(timestamps, closes):
+            if c is not None:
+                day = t // 86400
+                date_price[day] = c
+        sorted_days = sorted(date_price.keys())
+        if len(sorted_days) < 2:
             return None, None
-        prev, last = closes[-2], closes[-1]
+        prev = date_price[sorted_days[-2]]
+        last = date_price[sorted_days[-1]]
         return last, last - prev
     except Exception:
         return None, None
@@ -336,8 +347,9 @@ def format_category_message(label, items):
 
 
 def build_header(total_items):
-    today = datetime.now().strftime("%Y年%m月%d日")
-    dow = ["月", "火", "水", "木", "金", "土", "日"][datetime.now().weekday()]
+    now_jst = datetime.now(JST)
+    today = now_jst.strftime("%Y年%m月%d日")
+    dow = ["月", "火", "水", "木", "金", "土", "日"][now_jst.weekday()]
     return (
         f"📰 {today}（{dow}）朝刊\n"
         f"{'='*20}\n"
