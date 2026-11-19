@@ -5,6 +5,10 @@ on:
     - cron: '30 21 * * *'  # 毎日6:30 JST (UTC 21:30)
   workflow_dispatch:        # 手動実行も可能
 
+permissions:
+  contents: read
+  actions: write  # 60日間の無活動による自動停止を防ぐため（下の keepalive ステップ）
+
 jobs:
   send-news:
     runs-on: ubuntu-latest
@@ -24,3 +28,11 @@ jobs:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
         run: python news_bot.py
+
+      # GitHub は60日間コミットがないとスケジュール実行を自動停止する。
+      # 毎回 API でワークフローを有効化し直して、無活動カウントをリセットする。
+      - name: Keep workflow alive
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/daily-news.yml/enable"
