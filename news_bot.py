@@ -6,6 +6,7 @@ import re
 import requests
 import feedparser
 from urllib.parse import quote
+from googlenewsdecoder import gnewsdecoder
 from datetime import datetime, timezone, timedelta
 
 JST = timezone(timedelta(hours=9))
@@ -82,7 +83,19 @@ def nikkei_feed(query, max_items):
         "max": max_items,
         "title_suffix": " - 日本経済新聞",
         "no_summary": True,  # Googleニュースの要約は見出しの繰り返しなので使わない
+        "decode_google": True,  # リンクをGoogleニュース経由ではなく日経の記事URLにする
     }
+
+
+def resolve_google_news_link(link):
+    """Googleニュースのリンクを元記事のURLに変換する（失敗時はNone）"""
+    try:
+        r = gnewsdecoder(link, interval=0.5)
+        if r.get("status") or r.get("success"):
+            return r.get("decoded_url")
+    except Exception as e:
+        print(f"    リンク変換失敗: {e}")
+    return None
 
 
 CATEGORIES = [
@@ -355,6 +368,14 @@ def fetch_all_news():
                         continue
                     if link in seen_urls or title[:20] in seen_titles:
                         continue
+                    if feed_info.get("decode_google"):
+                        real = resolve_google_news_link(link)
+                        # 記事以外（ファンド情報・開示書類など）は除外
+                        if not real or "/article/" not in real:
+                            continue
+                        link = real
+                        if link in seen_urls:
+                            continue
                     seen_urls.add(link)
                     seen_titles.add(title[:20])
                     cat_items.append({"title": title, "summary": summary, "link": link,
