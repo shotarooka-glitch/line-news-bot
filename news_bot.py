@@ -5,6 +5,7 @@ import os
 import re
 import requests
 import feedparser
+from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 
 JST = timezone(timedelta(hours=9))
@@ -13,6 +14,9 @@ LINE_CHANNEL_ACCESS_TOKEN = os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
 LINE_USER_ID = os.environ["LINE_USER_ID"]
 
 LINE_MAX_LENGTH = 4900
+
+# この時間より古い記事は配信しない（フィードが更新停止していても古いニュースを流さないため）
+NEWS_MAX_AGE_HOURS = 36
 
 # ── マーケットデータ設定 ──────────────────────────────
 MARKET_SYMBOLS_UNUSED = {  # 旧設定（使用しない）
@@ -69,10 +73,23 @@ MA_KEYWORDS = [
     "分社化", "事業譲渡", "持株会社", "公開買付",
 ]
 
+def nikkei_feed(query, max_items):
+    """日経の見出しをGoogleニュースRSS経由で取得するフィード設定（日経は公式RSSなし）"""
+    q = quote(f"site:nikkei.com {query} when:1d")
+    return {
+        "name": "日経",
+        "url": f"https://news.google.com/rss/search?q={q}&hl=ja&gl=JP&ceid=JP:ja",
+        "max": max_items,
+        "title_suffix": " - 日本経済新聞",
+        "no_summary": True,  # Googleニュースの要約は見出しの繰り返しなので使わない
+    }
+
+
 CATEGORIES = [
     {
         "label": "💼 M&A・ファイナンス",
         "feeds": [
+            nikkei_feed("(TOB OR 買収 OR M&A OR 合併 OR 経営統合 OR 子会社化 OR 資本提携 OR IPO)", 8),
             {"name": "東洋経済",       "url": "https://toyokeizai.net/list/feed/rss", "max": 15},
             {"name": "NHK経済",        "url": "https://www3.nhk.or.jp/rss/news/cat6.xml", "max": 15},
             {"name": "Yahooビジネス",  "url": "https://news.yahoo.co.jp/rss/topics/business.xml", "max": 15},
@@ -82,6 +99,7 @@ CATEGORIES = [
     {
         "label": "📊 マーケット・経済",
         "feeds": [
+            nikkei_feed("(株価 OR 日経平均 OR 為替 OR 円安 OR 円相場 OR 日銀 OR 金利 OR 景気 OR 決算)", 6),
             {"name": "NHK経済",       "url": "https://www3.nhk.or.jp/rss/news/cat6.xml", "max": 5},
             {"name": "Yahooビジネス", "url": "https://news.yahoo.co.jp/rss/topics/business.xml", "max": 5},
             {"name": "Reuters経済",   "url": "https://jp.reuters.com/rssFeed/businessNews", "max": 4},
@@ -90,6 +108,7 @@ CATEGORIES = [
     {
         "label": "🏛️ 政治・政策",
         "feeds": [
+            nikkei_feed("(首相 OR 政府 OR 国会 OR 与党 OR 予算 OR 政策)", 5),
             {"name": "NHK政治",   "url": "https://www3.nhk.or.jp/rss/news/cat3.xml", "max": 5},
             {"name": "Yahoo政治", "url": "https://news.yahoo.co.jp/rss/topics/politics.xml", "max": 4},
         ],
@@ -97,6 +116,7 @@ CATEGORIES = [
     {
         "label": "🌏 国際・地政学",
         "feeds": [
+            nikkei_feed("(米国 OR 中国 OR 欧州 OR ロシア OR 中東 OR 関税)", 5),
             {"name": "NHK国際",     "url": "https://www3.nhk.or.jp/rss/news/cat4.xml", "max": 5},
             {"name": "Reuters国際", "url": "https://jp.reuters.com/rssFeed/worldNews", "max": 4},
             {"name": "Yahoo国際",   "url": "https://news.yahoo.co.jp/rss/topics/world.xml", "max": 3},
@@ -105,6 +125,7 @@ CATEGORIES = [
     {
         "label": "🔬 テクノロジー・産業",
         "feeds": [
+            nikkei_feed("(AI OR 生成AI OR 半導体 OR EV OR スタートアップ)", 5),
             {"name": "NHK科学",  "url": "https://www3.nhk.or.jp/rss/news/cat5.xml", "max": 4},
             {"name": "Yahoo IT", "url": "https://news.yahoo.co.jp/rss/topics/it.xml", "max": 4},
         ],
@@ -291,7 +312,16 @@ def matches_keywords(title, summary, keywords):
     return any(kw in title + summary for kw in keywords)
 
 
+def entry_published(entry):
+    """記事の公開日時をJSTで返す（取得できなければNone）"""
+    t = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+    if not t:
+        return None
+    return datetime(*t[:6], tzinfo=timezone.utc).astimezone(JST)
+
+
 def fetch_all_news():
+    cutoff = datetime.now(JST) - timedelta(hours=NEWS_MAX_AGE_HOURS)
     seen_urls = set()
     seen_titles = set()
     result = []
@@ -303,15 +333,22 @@ def fetch_all_news():
         for feed_info in category["feeds"]:
             try:
                 feed = feedparser.parse(feed_info["url"])
+                print(f"  [{feed_info['name']}] 取得 {len(feed.entries)}件")
                 count = 0
                 for entry in feed.entries:
                     if count >= feed_info["max"]:
                         break
                     title = entry.title.strip()
+                    suffix = feed_info.get("title_suffix")
+                    if suffix and title.endswith(suffix):
+                        title = title[: -len(suffix)].strip()
                     link = entry.link.strip()
-                    summary = clean_html(
+                    summary = "" if feed_info.get("no_summary") else clean_html(
                         getattr(entry, "summary", "") or getattr(entry, "description", "")
                     )
+                    published = entry_published(entry)
+                    if published and published < cutoff:
+                        continue
                     if not is_relevant(title):
                         continue
                     if filter_kws and not matches_keywords(title, summary, filter_kws):
@@ -320,7 +357,10 @@ def fetch_all_news():
                         continue
                     seen_urls.add(link)
                     seen_titles.add(title[:20])
-                    cat_items.append({"title": title, "summary": summary, "link": link})
+                    cat_items.append({"title": title, "summary": summary, "link": link,
+                                      "published": published, "source": feed_info["name"]})
+                    date_str = published.strftime("%m/%d %H:%M") if published else "日時不明"
+                    print(f"    {date_str} {title}")
                     count += 1
             except Exception as e:
                 print(f"{feed_info['name']} 取得失敗: {e}")
@@ -334,7 +374,10 @@ def format_category_message(label, items):
     lines = [label + "\n" + "=" * 20]
     links = []
     for i, item in enumerate(items, 1):
-        lines.append(f"\n【{i}】{item['title']}")
+        meta = item["source"]
+        if item.get("published"):
+            meta += " " + item["published"].strftime("%m/%d %H:%M")
+        lines.append(f"\n【{i}】{item['title']}（{meta}）")
         if item["summary"]:
             lines.append(item["summary"])
         links.append(f"[{i}] {item['link']}")
