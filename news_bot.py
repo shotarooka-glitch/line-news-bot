@@ -14,6 +14,9 @@ LINE_USER_ID = os.environ["LINE_USER_ID"]
 
 LINE_MAX_LENGTH = 4900
 
+# この時間より古い記事は配信しない（フィードが更新停止していても古いニュースを流さないため）
+NEWS_MAX_AGE_HOURS = 36
+
 # ── マーケットデータ設定 ──────────────────────────────
 MARKET_SYMBOLS_UNUSED = {  # 旧設定（使用しない）
     "【株式指数】": [
@@ -291,7 +294,16 @@ def matches_keywords(title, summary, keywords):
     return any(kw in title + summary for kw in keywords)
 
 
+def entry_published(entry):
+    """記事の公開日時をJSTで返す（取得できなければNone）"""
+    t = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+    if not t:
+        return None
+    return datetime(*t[:6], tzinfo=timezone.utc).astimezone(JST)
+
+
 def fetch_all_news():
+    cutoff = datetime.now(JST) - timedelta(hours=NEWS_MAX_AGE_HOURS)
     seen_urls = set()
     seen_titles = set()
     result = []
@@ -303,6 +315,7 @@ def fetch_all_news():
         for feed_info in category["feeds"]:
             try:
                 feed = feedparser.parse(feed_info["url"])
+                print(f"  [{feed_info['name']}] 取得 {len(feed.entries)}件")
                 count = 0
                 for entry in feed.entries:
                     if count >= feed_info["max"]:
@@ -312,6 +325,9 @@ def fetch_all_news():
                     summary = clean_html(
                         getattr(entry, "summary", "") or getattr(entry, "description", "")
                     )
+                    published = entry_published(entry)
+                    if published and published < cutoff:
+                        continue
                     if not is_relevant(title):
                         continue
                     if filter_kws and not matches_keywords(title, summary, filter_kws):
@@ -320,7 +336,10 @@ def fetch_all_news():
                         continue
                     seen_urls.add(link)
                     seen_titles.add(title[:20])
-                    cat_items.append({"title": title, "summary": summary, "link": link})
+                    cat_items.append({"title": title, "summary": summary, "link": link,
+                                      "published": published, "source": feed_info["name"]})
+                    date_str = published.strftime("%m/%d %H:%M") if published else "日時不明"
+                    print(f"    {date_str} {title}")
                     count += 1
             except Exception as e:
                 print(f"{feed_info['name']} 取得失敗: {e}")
@@ -334,7 +353,10 @@ def format_category_message(label, items):
     lines = [label + "\n" + "=" * 20]
     links = []
     for i, item in enumerate(items, 1):
-        lines.append(f"\n【{i}】{item['title']}")
+        meta = item["source"]
+        if item.get("published"):
+            meta += " " + item["published"].strftime("%m/%d %H:%M")
+        lines.append(f"\n【{i}】{item['title']}（{meta}）")
         if item["summary"]:
             lines.append(item["summary"])
         links.append(f"[{i}] {item['link']}")
